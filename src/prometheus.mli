@@ -82,24 +82,24 @@ module CollectorRegistry : sig
   val default : t
   (** The default registry. *)
 
-  val collect : t -> snapshot Lwt.t
+  val collect : t -> snapshot
   (** Read the current value of each metric. *)
 
   val register : t -> MetricInfo.t -> (unit -> Sample_set.t LabelSetMap.t) -> unit
   (** [register t metric collector] adds [metric] to the set of metrics being collected.
       It will call [collector ()] to collect the values each time [collect] is called. *)
 
-  val register_lwt : t -> MetricInfo.t -> (unit -> Sample_set.t LabelSetMap.t Lwt.t) -> unit
-  (** [register_lwt t metric collector] is the same as [register t metrics collector]
-      but [collector] returns [Sample_set.t LabelSetMap.t Lwt.t]. *)
+  val register_eio : t -> MetricInfo.t -> (unit -> Sample_set.t LabelSetMap.t Eio.Promise.t) -> unit
+  (** [register_eio t metric collector] is the same as [register t metrics collector]
+      but [collector] returns [Sample_set.t LabelSetMap.t Eio.Promise.t]. *)
 
   val register_pre_collect : t -> (unit -> unit) -> unit
   (** [register_pre_collect t fn] arranges for [fn ()] to be called at the start
       of each collection. This is useful if one expensive call provides
       information about multiple metrics. *)
 
-  val register_pre_collect_lwt : t -> (unit -> unit Lwt.t) -> unit
-  (** [register_pre_collect t fn] same as [register_pre_collect] but [fn] returns [unit Lwt.t]. *)
+  val register_pre_collect_eio : t -> (unit -> unit Eio.Promise.t) -> unit
+  (** [register_pre_collect_eio t fn] same as [register_pre_collect] but [fn] returns [unit Eio.Promise.t]. *)
 end
 (** A collection of metric reporters. Usually, only {!CollectorRegistry.default} is used. *)
 
@@ -155,10 +155,10 @@ module Gauge : sig
   val set : t -> float -> unit
   (** [set t v] sets the current value of the guage to [v]. *)
 
-  val track_inprogress : t -> (unit -> 'a Lwt.t) -> 'a Lwt.t
+  val track_inprogress : t -> (unit -> 'a Eio.Promise.t) -> 'a
   (** [track_inprogress t f] increases the value of the gauge by one while [f ()] is running. *)
 
-  val time : t -> (unit -> float) -> (unit -> 'a Lwt.t) -> 'a Lwt.t
+  val time : t -> (unit -> float) -> (unit -> 'a Eio.Promise.t) -> 'a
   (** [time t gettime f] calls [gettime ()] before and after executing [f ()] and
       increases the metric by the difference.
   *)
@@ -171,7 +171,7 @@ module Summary : sig
   val observe : t -> float -> unit
   (** [observe t v] increases the total by [v] and the count by one. *)
 
-  val time : t -> (unit -> float) -> (unit -> 'a Lwt.t) -> 'a Lwt.t
+  val time : t -> (unit -> float) -> (unit -> 'a Eio.Promise.t) -> 'a
   (** [time t gettime f] calls [gettime ()] before and after executing [f ()] and
       observes the difference. *)
 end
@@ -204,7 +204,7 @@ module type HISTOGRAM = sig
   val observe : t -> float -> unit
   (** [observe t v] adds one to the appropriate bucket for v and adds v to the sum. *)
 
-  val time : t -> (unit -> float) -> (unit -> 'a Lwt.t) -> 'a Lwt.t
+  val time : t -> (unit -> float) -> (unit -> 'a Eio.Promise.t) -> 'a
   (** [time t gettime f] calls [gettime ()] before and after executing [f ()] and
       observes the difference. *)
 end

@@ -1,7 +1,7 @@
 (library
  (name prometheus_reporter)
  (public_name prometheus-reporter)
- (libraries prometheus lwt astring fmt re)
+ (libraries prometheus astring fmt re)
  (modules Prometheus_reporter)
  (wrapped false))
 
