@@ -92,59 +92,56 @@ end
 module CollectorRegistry = struct
   type t = {
     mutable metrics     : (unit -> Sample_set.t LabelSetMap.t      ) MetricFamilyMap.t;
-    mutable metrics_lwt : (unit -> Sample_set.t LabelSetMap.t Lwt.t) MetricFamilyMap.t;
+    mutable metrics_eio : (unit -> Sample_set.t LabelSetMap.t Eio.Promise.t) MetricFamilyMap.t;
     mutable pre_collect     : (unit -> unit      ) list;
-    mutable pre_collect_lwt : (unit -> unit Lwt.t) list;
+    mutable pre_collect_eio : (unit -> unit Eio.Promise.t) list;
   }
 
   type snapshot = Sample_set.t LabelSetMap.t MetricFamilyMap.t
 
   let create () = {
     metrics = MetricFamilyMap.empty;
-    metrics_lwt = MetricFamilyMap.empty;
+    metrics_eio = MetricFamilyMap.empty;
     pre_collect = [];
-    pre_collect_lwt = [];
+    pre_collect_eio = [];
   }
 
   let default = create ()
 
   let register_pre_collect t f = t.pre_collect <- f :: t.pre_collect
 
-  let register_pre_collect_lwt t f = t.pre_collect_lwt <- f :: t.pre_collect_lwt
+  let register_pre_collect_eio t f = t.pre_collect_eio <- f :: t.pre_collect_eio
 
   let ensure_not_registered t info =
     if MetricFamilyMap.mem info t.metrics ||
-       MetricFamilyMap.mem info t.metrics_lwt
+       MetricFamilyMap.mem info t.metrics_eio
     then failwith (Format.asprintf "%a already registered" MetricName.pp info.MetricInfo.name)
 
   let register t info collector =
     ensure_not_registered t info;
     t.metrics <- MetricFamilyMap.add info collector t.metrics
 
-  let register_lwt t info collector =
+  let register_eio t info collector =
     ensure_not_registered t info;
-    t.metrics_lwt <- MetricFamilyMap.add info collector t.metrics_lwt
-
-  open Lwt.Infix
+    t.metrics_eio <- MetricFamilyMap.add info collector t.metrics_eio
 
   let map_p m =
     MetricFamilyMap.fold (fun k f acc -> (k, f ()) :: acc) m []
-    |> Lwt_list.fold_left_s
-      (fun acc (k, v) -> v >|= fun v -> MetricFamilyMap.add k v acc)
+    |> List.fold_left
+      (fun acc (k, v) -> v |> fun v -> MetricFamilyMap.add k (Eio.Std.Promise.await v) acc)
       MetricFamilyMap.empty
 
   let collect t =
     List.iter (fun f -> f ()) t.pre_collect;
-    Lwt_list.iter_p (fun f -> f ()) t.pre_collect_lwt >>= fun () ->
+    List.iter (fun f -> Eio.Std.Promise.await @@ f ()) t.pre_collect_eio |> fun () ->
     let metrics = MetricFamilyMap.map (fun f -> f ()) t.metrics in
-    map_p t.metrics_lwt >|= fun metrics_lwt ->
+    map_p t.metrics_eio |> fun metrics_eio ->
     MetricFamilyMap.merge
       (fun _ v1 v2 ->
          match v1 with
          | Some v1 -> Some v1
          | None -> v2)
-      metrics metrics_lwt
-
+      metrics metrics_eio
 end
 
 module type METRIC = sig
@@ -242,18 +239,19 @@ module Gauge = struct
   let set t v =
     t := v
 
-  let track_inprogress t fn =
+  let track_inprogress (t: t) (fn : unit -> 'a) =
     inc_one t;
-    Lwt.finalize fn (fun () -> dec_one t; Lwt.return_unit)
+    let ret = Eio.Std.Promise.await (fn ()) in
+    dec_one t;
+    ret
 
   let time t gettimeofday fn =
     let start = gettimeofday () in
-    Lwt.finalize fn
-      (fun () ->
-         let finish = gettimeofday () in
-         inc t (finish -. start);
-         Lwt.return_unit
-      )
+    let ret = Eio.Std.Promise.await (fn ()) in
+    let finish = gettimeofday () in
+    inc t (finish -. start);
+    ret
+      
 end
 
 module Summary = struct
@@ -283,12 +281,10 @@ module Summary = struct
 
   let time t gettimeofday fn =
     let start = gettimeofday () in
-    Lwt.finalize fn
-      (fun () ->
-         let finish = gettimeofday () in
-         observe t (finish -. start);
-         Lwt.return_unit
-      )
+    let ret = Eio.Std.Promise.await (fn ()) in
+    let finish = gettimeofday () in
+    observe t (finish -. start);
+    ret
 end
 
 module Histogram_spec = struct
@@ -337,7 +333,7 @@ end
 module type HISTOGRAM = sig
   include METRIC
   val observe : t -> float -> unit
-  val time : t -> (unit -> float) -> (unit -> 'a Lwt.t) -> 'a Lwt.t
+  val time : t -> (unit -> float) -> (unit -> 'a Eio.Promise.t) -> 'a
 end
 
 let bucket_label = LabelName.v "le"
@@ -387,12 +383,10 @@ module Histogram (Buckets : BUCKETS) = struct
 
   let time t gettimeofday fn =
     let start = gettimeofday () in
-    Lwt.finalize fn
-      (fun () ->
-         let finish = gettimeofday () in
-         observe t (finish -. start);
-         Lwt.return_unit
-      )
+    let ret = Eio.Std.Promise.await (fn ()) in
+    let finish = gettimeofday () in
+    observe t (finish -. start);
+    ret
 end
 
 module DefaultHistogram = Histogram (
